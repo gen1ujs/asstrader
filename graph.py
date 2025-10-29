@@ -84,18 +84,6 @@ df_full = load_df_from_excel(default_folder, pattern, uploaded)
 st.sidebar.header("Görünüm")
 use_last_3m = st.sidebar.checkbox("Sadece son 40 günü göster", value=True)
 ma_window = st.sidebar.number_input("MA Penceresi (saat)", min_value=10, max_value=1000, value=100, step=5)
-threshold_pct = st.sidebar.slider(
-    "Kırılım doğrulama eşiği (%)",
-    min_value=0.0,
-    max_value=20.0,
-    value=0.0,
-    step=0.5,
-    help=(
-        "Fiyatın kırılımın geçerli sayılması için hareketli ortalama değerine göre minimum ne kadar "
-        "yüzde uzaklaşması gerektiğini belirler. 0 seçilirse her çapraz geçiş sinyal üretir."
-    ),
-)
-threshold = threshold_pct / 100.0
 show_signals = st.sidebar.checkbox("Kırılım oklarını göster", value=True)
 
 
@@ -107,73 +95,32 @@ if use_last_3m:
 
 # MA hesapla (görünür veri üzerinde)
 df_view["MA"] = df_view["close"].rolling(int(ma_window), min_periods=int(ma_window)).mean()
-signals = [""] * len(df_view)
-periods = [np.nan] * len(df_view)
+prev_close = df_view["close"].shift(1)
+prev_ma = df_view["MA"].shift(1)
 
-candidate_dir = None
-current_period = 0
+long_cross = (
+    (prev_close < prev_ma)
+    & (df_view["close"] > df_view["MA"])
+    & df_view["MA"].notna()
+)
+short_cross = (
+    (prev_close > prev_ma)
+    & (df_view["close"] < df_view["MA"])
+    & df_view["MA"].notna()
+)
 
-for idx in range(len(df_view)):
-    ma_value = df_view.at[idx, "MA"]
-    close_value = df_view.at[idx, "close"]
+df_view["signal"] = np.select(
+    [long_cross, short_cross],
+    ["LONG", "SHORT"],
+    default=""
+)
+df_view["period"] = df_view["signal"].ne("").cumsum()
 
-    if np.isnan(ma_value) or np.isnan(close_value):
-        periods[idx] = current_period if current_period > 0 else np.nan
-        continue
-
-    prev_close = df_view.at[idx - 1, "close"] if idx > 0 else np.nan
-    prev_ma = df_view.at[idx - 1, "MA"] if idx > 0 else np.nan
-
-    triggered_signal = None
-
-    if candidate_dir == "LONG":
-        if close_value < ma_value:
-            candidate_dir = None
-        elif close_value >= ma_value * (1 + threshold):
-            triggered_signal = "LONG"
-            candidate_dir = None
-    elif candidate_dir == "SHORT":
-        if close_value > ma_value:
-            candidate_dir = None
-        elif close_value <= ma_value * (1 - threshold):
-            triggered_signal = "SHORT"
-            candidate_dir = None
-
-    if (
-        triggered_signal is None
-        and idx > 0
-        and not np.isnan(prev_ma)
-        and not np.isnan(prev_close)
-    ):
-        crossed_up = prev_close < prev_ma and close_value >= ma_value
-        crossed_down = prev_close > prev_ma and close_value <= ma_value
-
-        if crossed_up:
-            if close_value >= ma_value * (1 + threshold):
-                triggered_signal = "LONG"
-            else:
-                candidate_dir = "LONG"
-        elif crossed_down:
-            if close_value <= ma_value * (1 - threshold):
-                triggered_signal = "SHORT"
-            else:
-                candidate_dir = "SHORT"
-
-    if triggered_signal:
-        signals[idx] = triggered_signal
-        current_period += 1
-
-    periods[idx] = current_period if current_period > 0 else np.nan
-
-df_view["signal"] = signals
-df_view["period"] = pd.Series(periods, dtype="Int64")
-
-long_mask = df_view["signal"] == "LONG"
-short_mask = df_view["signal"] == "SHORT"
-long_x  = df_view.loc[long_mask,  "timestamp"]
-long_y  = df_view.loc[long_mask,  "close"]
-short_x = df_view.loc[short_mask, "timestamp"]
-short_y = df_view.loc[short_mask, "close"]
+# Sinyal noktalarının x-y koordinatları
+long_x  = df_view.loc[long_cross,  "timestamp"]
+long_y  = df_view.loc[long_cross,  "close"]
+short_x = df_view.loc[short_cross, "timestamp"]
+short_y = df_view.loc[short_cross, "close"]
 
 # -------------------- Metrics --------------------
 if len(df_view) == 0:
@@ -182,13 +129,10 @@ if len(df_view) == 0:
 
 rows = len(df_view)
 span_hours = (df_view["timestamp"].iloc[-1] - df_view["timestamp"].iloc[0]).total_seconds() / 3600
-period_values = df_view["period"].dropna()
-total_periods = int(period_values.max()) if not period_values.empty else 0
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3 = st.columns(3)
 c1.metric("Satır", f"{rows:,}")
 c2.metric("Zaman Aralığı (saat)", f"{span_hours:,.0f}")
 c3.metric("Dönem", f"{df_view['timestamp'].iloc[0].strftime('%Y-%m-%d')} → {df_view['timestamp'].iloc[-1].strftime('%Y-%m-%d')}")
-c4.metric("Periyot Sayısı", f"{total_periods}")
 
 # -------------------- Chart --------------------
 st.subheader("Candlestick + MA")
