@@ -9,7 +9,6 @@ import io
 import glob
 from datetime import timedelta
 import pandas as pd
-import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
@@ -84,6 +83,14 @@ df_full = load_df_from_excel(default_folder, pattern, uploaded)
 st.sidebar.header("Görünüm")
 use_last_3m = st.sidebar.checkbox("Sadece son 40 günü göster", value=True)
 ma_window = st.sidebar.number_input("MA Penceresi (saat)", min_value=10, max_value=1000, value=100, step=5)
+signal_threshold_pct = st.sidebar.slider(
+    "Kırılım doğrulama eşiği (%)",
+    min_value=0.0,
+    max_value=20.0,
+    value=0.0,
+    step=0.5,
+    help="Fiyatın hareketli ortalamanın kaç %% üzerine/altına çıktığında kırılımın geçerli sayılacağını belirler."
+)
 show_signals = st.sidebar.checkbox("Kırılım oklarını göster", value=True)
 
 
@@ -95,26 +102,50 @@ if use_last_3m:
 
 # MA hesapla (görünür veri üzerinde)
 df_view["MA"] = df_view["close"].rolling(int(ma_window), min_periods=int(ma_window)).mean()
-prev_close = df_view["close"].shift(1)
-prev_ma = df_view["MA"].shift(1)
+threshold_ratio = signal_threshold_pct / 100.0
 
-long_cross = (
-    (prev_close < prev_ma)
-    & (df_view["close"] > df_view["MA"])
-    & df_view["MA"].notna()
-)
-short_cross = (
-    (prev_close > prev_ma)
-    & (df_view["close"] < df_view["MA"])
-    & df_view["MA"].notna()
-)
+signals = []
+period_ids = []
+current_period = 0
+pending_long = False
+pending_short = False
 
-df_view["signal"] = np.select(
-    [long_cross, short_cross],
-    ["LONG", "SHORT"],
-    default=""
-)
-df_view["period"] = df_view["signal"].ne("").cumsum()
+for _, row in df_view.iterrows():
+    ma_val = row["MA"]
+    close_val = row["close"]
+
+    if pd.isna(ma_val) or ma_val == 0:
+        signals.append("")
+        period_ids.append(current_period)
+        continue
+
+    rel_diff = (close_val - ma_val) / ma_val
+
+    if rel_diff <= -threshold_ratio:
+        pending_long = True
+    if rel_diff >= threshold_ratio:
+        pending_short = True
+
+    signal = ""
+    if pending_long and rel_diff > threshold_ratio:
+        signal = "LONG"
+        pending_long = False
+        pending_short = True
+        current_period += 1
+    elif pending_short and rel_diff < -threshold_ratio:
+        signal = "SHORT"
+        pending_short = False
+        pending_long = True
+        current_period += 1
+
+    signals.append(signal)
+    period_ids.append(current_period)
+
+df_view["signal"] = pd.Series(signals, index=df_view.index)
+df_view["period"] = pd.Series(period_ids, index=df_view.index, dtype="int64")
+
+long_cross = df_view["signal"] == "LONG"
+short_cross = df_view["signal"] == "SHORT"
 
 # Sinyal noktalarının x-y koordinatları
 long_x  = df_view.loc[long_cross,  "timestamp"]
@@ -129,10 +160,19 @@ if len(df_view) == 0:
 
 rows = len(df_view)
 span_hours = (df_view["timestamp"].iloc[-1] - df_view["timestamp"].iloc[0]).total_seconds() / 3600
-c1, c2, c3 = st.columns(3)
+last_period_value = int(df_view["period"].iloc[-1])
+num_periods = last_period_value + 1
+validated_breakouts = int((df_view["signal"] != "").sum())
+
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Satır", f"{rows:,}")
 c2.metric("Zaman Aralığı (saat)", f"{span_hours:,.0f}")
 c3.metric("Dönem", f"{df_view['timestamp'].iloc[0].strftime('%Y-%m-%d')} → {df_view['timestamp'].iloc[-1].strftime('%Y-%m-%d')}")
+c4.metric(
+    "Periyot Sayısı",
+    f"{num_periods}",
+    help=f"Doğrulanan kırılım sayısı: {validated_breakouts}"
+)
 
 # -------------------- Chart --------------------
 st.subheader("Candlestick + MA")
