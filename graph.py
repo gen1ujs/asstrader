@@ -84,7 +84,7 @@ df_full = load_df_from_excel(default_folder, pattern, uploaded)
 st.sidebar.header("Görünüm")
 use_last_3m = st.sidebar.checkbox("Sadece son 40 günü göster", value=True)
 ma_window = st.sidebar.number_input("MA Penceresi (saat)", min_value=10, max_value=1000, value=100, step=5)
-threshold_pct = st.sidebar.number_input(
+threshold_pct = st.sidebar.slider(
     "Kırılım doğrulama eşiği (%)",
     min_value=0.0,
     max_value=20.0,
@@ -111,7 +111,6 @@ signals = [""] * len(df_view)
 periods = [np.nan] * len(df_view)
 
 candidate_dir = None
-candidate_ma = np.nan
 current_period = 0
 
 for idx in range(len(df_view)):
@@ -130,19 +129,15 @@ for idx in range(len(df_view)):
     if candidate_dir == "LONG":
         if close_value < ma_value:
             candidate_dir = None
-            candidate_ma = np.nan
-        elif close_value >= candidate_ma * (1 + threshold):
+        elif close_value >= ma_value * (1 + threshold):
             triggered_signal = "LONG"
             candidate_dir = None
-            candidate_ma = np.nan
     elif candidate_dir == "SHORT":
         if close_value > ma_value:
             candidate_dir = None
-            candidate_ma = np.nan
-        elif close_value <= candidate_ma * (1 - threshold):
+        elif close_value <= ma_value * (1 - threshold):
             triggered_signal = "SHORT"
             candidate_dir = None
-            candidate_ma = np.nan
 
     if (
         triggered_signal is None
@@ -158,13 +153,11 @@ for idx in range(len(df_view)):
                 triggered_signal = "LONG"
             else:
                 candidate_dir = "LONG"
-                candidate_ma = ma_value
         elif crossed_down:
             if close_value <= ma_value * (1 - threshold):
                 triggered_signal = "SHORT"
             else:
                 candidate_dir = "SHORT"
-                candidate_ma = ma_value
 
     if triggered_signal:
         signals[idx] = triggered_signal
