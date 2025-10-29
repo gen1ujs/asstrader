@@ -154,6 +154,24 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 )
 
+if show_signals:
+    # Long sinyaller: triangle-up
+    fig.add_trace(go.Scatter(
+        x=long_x, y=long_y,
+        mode="markers",
+        name="Long Breakout",
+        marker=dict(symbol="triangle-up", size=10, line=dict(width=1)),
+        hovertemplate="Long ↗<br>%{x}<br>Close: %{y}<extra></extra>"
+    ))
+    # Short sinyaller: triangle-down
+    fig.add_trace(go.Scatter(
+        x=short_x, y=short_y,
+        mode="markers",
+        name="Short Breakdown",
+        marker=dict(symbol="triangle-down", size=10, line=dict(width=1)),
+        hovertemplate="Short ↘<br>%{x}<br>Close: %{y}<extra></extra>"
+    ))
+
 st.plotly_chart(fig, use_container_width=True)
 
 # -------------------- Data Table --------------------
