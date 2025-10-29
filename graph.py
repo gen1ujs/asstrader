@@ -84,7 +84,6 @@ df_full = load_df_from_excel(default_folder, pattern, uploaded)
 st.sidebar.header("Görünüm")
 use_last_3m = st.sidebar.checkbox("Sadece son 40 günü göster", value=True)
 ma_window = st.sidebar.number_input("MA Penceresi (saat)", min_value=10, max_value=1000, value=100, step=5)
-show_volume = st.sidebar.checkbox("Hacmi göster", value=True)
 show_signals = st.sidebar.checkbox("Kırılım oklarını göster", value=True)
 
 
@@ -97,10 +96,25 @@ if use_last_3m:
 # MA hesapla (görünür veri üzerinde)
 df_view["MA"] = df_view["close"].rolling(int(ma_window), min_periods=int(ma_window)).mean()
 prev_close = df_view["close"].shift(1)
-prev_ma    = df_view["MA"].shift(1)
+prev_ma = df_view["MA"].shift(1)
 
-long_cross  = (prev_close <= prev_ma) & (df_view["close"] > df_view["MA"])
-short_cross = (prev_close >= prev_ma) & (df_view["close"] < df_view["MA"])
+long_cross = (
+    (prev_close < prev_ma)
+    & (df_view["close"] > df_view["MA"])
+    & df_view["MA"].notna()
+)
+short_cross = (
+    (prev_close > prev_ma)
+    & (df_view["close"] < df_view["MA"])
+    & df_view["MA"].notna()
+)
+
+df_view["signal"] = np.select(
+    [long_cross, short_cross],
+    ["LONG", "SHORT"],
+    default=""
+)
+df_view["period"] = df_view["signal"].ne("").cumsum()
 
 # Sinyal noktalarının x-y koordinatları
 long_x  = df_view.loc[long_cross,  "timestamp"]
@@ -136,17 +150,7 @@ fig.add_trace(go.Scatter(
     mode="lines", name=f"MA{ma_window}"
 ))
 
-if show_volume and "volume" in df_view.columns:
-    fig.add_trace(go.Bar(
-        x=df_view["timestamp"], y=df_view["volume"],
-        name="Volume", opacity=0.2, yaxis="y2"
-    ))
-    fig.update_layout(
-        yaxis=dict(title="Price"),
-        yaxis2=dict(title="Volume", overlaying="y", side="right", showgrid=False)
-    )
-else:
-    fig.update_yaxes(title="Price")
+fig.update_yaxes(title="Price")
 
 fig.update_layout(
     xaxis_rangeslider_visible=True,
@@ -160,7 +164,7 @@ if show_signals:
         x=long_x, y=long_y,
         mode="markers",
         name="Long Breakout",
-        marker=dict(symbol="triangle-up", size=10, line=dict(width=1)),
+        marker=dict(symbol="triangle-up", size=10, line=dict(width=1), color="green"),
         hovertemplate="Long ↗<br>%{x}<br>Close: %{y}<extra></extra>"
     ))
     # Short sinyaller: triangle-down
@@ -168,7 +172,7 @@ if show_signals:
         x=short_x, y=short_y,
         mode="markers",
         name="Short Breakdown",
-        marker=dict(symbol="triangle-down", size=10, line=dict(width=1)),
+        marker=dict(symbol="triangle-down", size=10, line=dict(width=1), color="red"),
         hovertemplate="Short ↘<br>%{x}<br>Close: %{y}<extra></extra>"
     ))
 
@@ -176,7 +180,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 # -------------------- Data Table --------------------
 st.subheader("Veri Tablosu")
-show_cols = ["timestamp", "open", "high", "low", "close", "volume", "MA"]
+show_cols = ["timestamp", "open", "high", "low", "close", "volume", "MA", "signal", "period"]
 show_cols = [c for c in show_cols if c in df_view.columns]
 st.dataframe(df_view[show_cols], use_container_width=True, height=420)
 
