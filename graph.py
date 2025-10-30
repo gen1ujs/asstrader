@@ -106,9 +106,11 @@ threshold_ratio = signal_threshold_pct / 100.0
 
 signals = []
 period_ids = []
+period_types = []
 current_period = 0
 pending_long = False
 pending_short = False
+current_regime = None
 
 for _, row in df_view.iterrows():
     ma_val = row["MA"]
@@ -117,6 +119,7 @@ for _, row in df_view.iterrows():
     if pd.isna(ma_val) or ma_val == 0:
         signals.append("")
         period_ids.append(current_period)
+        period_types.append(current_regime)
         continue
 
     rel_diff = (close_val - ma_val) / ma_val
@@ -132,17 +135,21 @@ for _, row in df_view.iterrows():
         pending_long = False
         pending_short = True
         current_period += 1
+        current_regime = "long"
     elif pending_short and rel_diff < -threshold_ratio:
         signal = "SHORT"
         pending_short = False
         pending_long = True
         current_period += 1
+        current_regime = "short"
 
     signals.append(signal)
     period_ids.append(current_period)
+    period_types.append(current_regime)
 
 df_view["signal"] = pd.Series(signals, index=df_view.index)
 df_view["period"] = pd.Series(period_ids, index=df_view.index, dtype="int64")
+df_view["period_type"] = pd.Series(period_types, index=df_view.index, dtype="object")
 
 long_cross = df_view["signal"] == "LONG"
 short_cross = df_view["signal"] == "SHORT"
@@ -184,8 +191,11 @@ if pd.isna(bar_duration) or bar_duration == pd.Timedelta(0):
     bar_duration = timedelta(hours=1)
 
 for _, period_df in df_view.groupby("period"):
-    period_type = period_df["period_type"].iloc[-1]
-    if period_type not in {"long", "short"}:
+    period_type_series = period_df.get("period_type")
+    if period_type_series is None or period_type_series.empty:
+        continue
+    period_type = period_type_series.iloc[-1]
+    if pd.isna(period_type) or period_type not in {"long", "short"}:
         continue
     fillcolor = "green" if period_type == "long" else "red"
     period_end = period_df["timestamp"].iloc[-1]
