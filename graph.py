@@ -178,6 +178,26 @@ c4.metric(
 st.subheader("Candlestick + MA")
 
 fig = go.Figure()
+
+bar_duration = df_view["timestamp"].diff().median()
+if pd.isna(bar_duration) or bar_duration == pd.Timedelta(0):
+    bar_duration = timedelta(hours=1)
+
+for _, period_df in df_view.groupby("period"):
+    period_type = period_df["period_type"].iloc[-1]
+    if period_type not in {"long", "short"}:
+        continue
+    fillcolor = "green" if period_type == "long" else "red"
+    period_end = period_df["timestamp"].iloc[-1]
+    fig.add_vrect(
+        x0=period_df["timestamp"].iloc[0],
+        x1=period_end + bar_duration,
+        fillcolor=fillcolor,
+        opacity=0.4,
+        layer="below",
+        line_width=0,
+    )
+
 fig.add_trace(go.Candlestick(
     x=df_view["timestamp"],
     open=df_view["open"], high=df_view["high"],
@@ -220,7 +240,18 @@ st.plotly_chart(fig, use_container_width=True)
 
 # -------------------- Data Table --------------------
 st.subheader("Veri Tablosu")
-show_cols = ["timestamp", "open", "high", "low", "close", "volume", "MA", "signal", "period"]
+show_cols = [
+    "timestamp",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "MA",
+    "signal",
+    "period",
+    "period_type",
+]
 show_cols = [c for c in show_cols if c in df_view.columns]
 st.dataframe(df_view[show_cols], use_container_width=True, height=420)
 
