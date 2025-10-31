@@ -111,6 +111,25 @@ signal_threshold_pct = st.sidebar.slider(
 show_signals = st.sidebar.checkbox("Kırılım oklarını göster", value=True)
 
 
+# -------------------- Sidebar: Strategy params --------------------
+st.sidebar.header("Strateji")
+stop_threshold_pct = st.sidebar.number_input(
+    "Stop (MA'ya gore %)", min_value=0.0, max_value=50.0, value=1.0, step=0.1,
+    help="Pozisyona girildiginde stop fiyati MA'ye gore % uzaklikla sabitlenir (LONG: MA-% | SHORT: MA+%)."
+)
+tp_long_pct = st.sidebar.number_input(
+    "TP Long (%)", min_value=0.0, max_value=200.0, value=5.0, step=0.1,
+    help="Long icin giris fiyata gore % kar al."
+)
+tp_short_pct = st.sidebar.number_input(
+    "TP Short (%)", min_value=0.0, max_value=200.0, value=5.0, step=0.1,
+    help="Short icin giris fiyata gore % kar al."
+)
+position_size = st.sidebar.number_input(
+    "Islem Buyuklugu (USDT)", min_value=0.0, value=1000.0, step=100.0,
+    help="Her islem icin kullanilacak notyonel tutar (USDT)."
+)
+
 # -------------------- Build df_view --------------------
 df_view = df_full.copy()
 if use_last_3m:
@@ -328,6 +347,72 @@ st.plotly_chart(
 )
 
 # ---- Tüm veri (Excel'deki tüm günler) için dinamik metrikler ----
+roi_times = []
+roi_values = []  # cumulative PnL in USDT
+cum_pnl = 0.0
+
+in_position = False
+pos_side = None  # 'long' or 'short'
+entry_price = None
+stop_price = None
+tp_price = None
+
+for i, row in df_view.iterrows():
+    ts = row["timestamp"]
+    high = row.get("high")
+    low = row.get("low")
+    close = row.get("close")
+    ma_val = row.get("MA")
+
+    if not in_position:
+        sig = row.get("signal")
+        if sig == "LONG" and pd.notna(ma_val) and ma_val > 0 and close > 0:
+            in_position = True
+            pos_side = "long"
+            entry_price = float(close)
+            stop_price = float(ma_val) * (1.0 - stop_threshold_pct / 100.0)
+            tp_price = entry_price * (1.0 + tp_long_pct / 100.0)
+        elif sig == "SHORT" and pd.notna(ma_val) and ma_val > 0 and close > 0:
+            in_position = True
+            pos_side = "short"
+            entry_price = float(close)
+            stop_price = float(ma_val) * (1.0 + stop_threshold_pct / 100.0)
+            tp_price = entry_price * (1.0 - tp_short_pct / 100.0)
+
+    if in_position and pd.notna(high) and pd.notna(low):
+        exit_hit = None
+        exit_price = None
+        if pos_side == "long":
+            if low <= stop_price:
+                exit_hit = "stop"; exit_price = float(stop_price)
+            elif high >= tp_price:
+                exit_hit = "tp"; exit_price = float(tp_price)
+            if exit_hit:
+                qty = position_size / entry_price if entry_price else 0.0
+                trade_pnl = (exit_price - entry_price) * qty
+                cum_pnl += trade_pnl
+                in_position = False; pos_side = None; entry_price = stop_price = tp_price = None
+        elif pos_side == "short":
+            if high >= stop_price:
+                exit_hit = "stop"; exit_price = float(stop_price)
+            elif low <= tp_price:
+                exit_hit = "tp"; exit_price = float(tp_price)
+            if exit_hit:
+                qty = position_size / entry_price if entry_price else 0.0
+                trade_pnl = (entry_price - exit_price) * qty
+                cum_pnl += trade_pnl
+                in_position = False; pos_side = None; entry_price = stop_price = tp_price = None
+
+    roi_times.append(ts)
+    roi_values.append(cum_pnl)
+
+roi_fig = go.Figure()
+roi_fig.add_hline(y=0, line_width=1, opacity=0.5)
+roi_fig.add_trace(go.Scatter(x=roi_times, y=roi_values, mode="lines", name="ROI (PnL)", line=dict(color="#2a6fdb")))
+roi_fig.update_layout(margin=dict(l=10, r=10, t=30, b=10), showlegend=False, yaxis_title="PnL (USDT)")
+st.subheader("ROI (Kumulatif PnL)")
+st.plotly_chart(roi_fig, use_container_width=False, config={"displayModeBar": True, "responsive": True})
+
 df_full_calc = df_full.copy()
 df_full_calc["MA"] = df_full_calc["close"].rolling(int(ma_window), min_periods=int(ma_window)).mean()
 
