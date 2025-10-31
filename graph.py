@@ -21,10 +21,27 @@ st.caption(
     "candlestick + hareketli ortalama ile görselleştirir ve görüntülenen veriyi Excel olarak indirmenizi sağlar."
 )
 
+# Full-width ve full-height grafik için basit CSS
+st.markdown(
+    """
+    <style>
+    .block-container { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+    div[data-testid=stPlotlyChart] { height: 100vh !important; }
+    div[data-testid=stPlotlyChart] .plot-container,
+    div[data-testid=stPlotlyChart] .main-svg,
+    div[data-testid=stPlotlyChart] .js-plotly-plot { height: 100% !important; width: 100% !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # -------------------- Sidebar: Data source --------------------
 st.sidebar.header("Veri Kaynağı (Excel)")
 default_folder = st.sidebar.text_input("Veri klasörü", value="data")
 pattern = st.sidebar.text_input("Dosya paterni", value="TAOUSDT.xlsx")
+# Varsayılan klasör değeri 'data' ise boş olarak kullan (aynı dizin)
+if default_folder == "data":
+    default_folder = ""
 uploaded = st.sidebar.file_uploader("Excel yükle (opsiyonel)", type=["xlsx", "xls"])
 
 # -------------------- Loader --------------------
@@ -220,12 +237,15 @@ fig.add_trace(go.Scatter(
     mode="lines", name=f"MA{ma_window}"
 ))
 
-fig.update_yaxes(title="Price")
+fig.update_yaxes(title="Price", rangemode="normal", autorange=True, fixedrange=False)
 
 fig.update_layout(
+    dragmode="pan",
     xaxis_rangeslider_visible=True,
     margin=dict(l=10, r=10, t=30, b=10),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    uirevision="constant",
+    autosize=True
 )
 
 if show_signals:
@@ -246,7 +266,15 @@ if show_signals:
         hovertemplate="Short ↘<br>%{x}<br>Close: %{y}<extra></extra>"
     ))
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "scrollZoom": True,
+        "displayModeBar": True,
+        "responsive": True
+    }
+)
 
 # -------------------- Data Table --------------------
 st.subheader("Veri Tablosu")
