@@ -26,10 +26,10 @@ st.markdown(
     """
     <style>
     .block-container { padding-top: 0.5rem; padding-bottom: 0.5rem; }
-    div[data-testid=stPlotlyChart] { height: 100vh !important; }
+    div[data-testid=stPlotlyChart] { height: auto !important; }
     div[data-testid=stPlotlyChart] .plot-container,
     div[data-testid=stPlotlyChart] .main-svg,
-    div[data-testid=stPlotlyChart] .js-plotly-plot { height: 100% !important; width: 100% !important; }
+    div[data-testid=stPlotlyChart] .js-plotly-plot { height: auto !important; width: auto !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -207,6 +207,10 @@ bar_duration = df_view["timestamp"].diff().median()
 if pd.isna(bar_duration) or bar_duration == pd.Timedelta(0):
     bar_duration = timedelta(hours=1)
 
+# Backtest helpers: collect per-period extreme moves from signal
+long_peak_gains = []  # percent increase from LONG signal close to period max high
+short_trough_drops = []  # percent decrease from SHORT signal close to period min low
+
 for _, period_df in df_view.groupby("period"):
     period_type_series = period_df.get("period_type")
     if period_type_series is None or period_type_series.empty:
@@ -224,6 +228,40 @@ for _, period_df in df_view.groupby("period"):
         layer="below",
         line_width=0,
     )
+
+    # Draw horizontal line at per-period extreme and compute move from signal
+    period_start_ts = period_df["timestamp"].iloc[0]
+    period_end_ts = period_end + bar_duration
+
+    if period_type == "long":
+        y_extreme = period_df["high"].max()
+        # locate the LONG signal row within this period; fallback to first row
+        sig_rows = period_df[period_df["signal"] == "LONG"]
+        start_close = (sig_rows["close"].iloc[0] if not sig_rows.empty else period_df["close"].iloc[0])
+        if pd.notna(start_close) and pd.notna(y_extreme) and start_close > 0:
+            long_peak_gains.append((y_extreme / start_close - 1.0) * 100.0)
+        fig.add_shape(
+            type="line",
+            x0=period_start_ts, x1=period_end_ts,
+            y0=y_extreme, y1=y_extreme,
+            xref="x", yref="y",
+            line=dict(color="green", width=2, dash="dot"),
+            layer="above",
+        )
+    elif period_type == "short":
+        y_extreme = period_df["low"].min()
+        sig_rows = period_df[period_df["signal"] == "SHORT"]
+        start_close = (sig_rows["close"].iloc[0] if not sig_rows.empty else period_df["close"].iloc[0])
+        if pd.notna(start_close) and pd.notna(y_extreme) and start_close > 0:
+            short_trough_drops.append((1.0 - (y_extreme / start_close)) * 100.0)
+        fig.add_shape(
+            type="line",
+            x0=period_start_ts, x1=period_end_ts,
+            y0=y_extreme, y1=y_extreme,
+            xref="x", yref="y",
+            line=dict(color="red", width=2, dash="dot"),
+            layer="above",
+        )
 
 fig.add_trace(go.Candlestick(
     x=df_view["timestamp"],
@@ -248,6 +286,19 @@ fig.update_layout(
     autosize=True
 )
 
+# -------------------- Backtest Metrics --------------------
+avg_long_gain = (sum(long_peak_gains) / len(long_peak_gains)) if long_peak_gains else None
+avg_short_drop = (sum(short_trough_drops) / len(short_trough_drops)) if short_trough_drops else None
+
+st.subheader("Backtest Metrikleri")
+bc1, bc2, bc3, bc4 = st.columns(4)
+bc1.metric("Ortalama Tepe Artış (%)", f"{avg_long_gain:.2f}" if avg_long_gain is not None else "-",
+           help="LONG sinyal kapanışından periyot içi en yüksek fiyata yüzde artış ortalaması")
+bc2.metric("Ortalama Dip Düşüş (%)", f"{avg_short_drop:.2f}" if avg_short_drop is not None else "-",
+           help="SHORT sinyal kapanışından periyot içi en düşük fiyata yüzde düşüş ortalaması")
+bc3.metric("LONG Periyot Sayısı", f"{len(long_peak_gains)}")
+bc4.metric("SHORT Periyot Sayısı", f"{len(short_trough_drops)}")
+
 if show_signals:
     # Long sinyaller: triangle-up
     fig.add_trace(go.Scatter(
@@ -268,13 +319,66 @@ if show_signals:
 
 st.plotly_chart(
     fig,
-    use_container_width=True,
+    use_container_width=False,
     config={
         "scrollZoom": True,
         "displayModeBar": True,
         "responsive": True
     }
 )
+
+# ---- Tüm veri (Excel'deki tüm günler) için dinamik metrikler ----
+df_full_calc = df_full.copy()
+df_full_calc["MA"] = df_full_calc["close"].rolling(int(ma_window), min_periods=int(ma_window)).mean()
+
+# Tam veride sinyal/periyotları aynı eşi̇klerle hesapla
+signals_f, period_ids_f, period_types_f = [], [], []
+current_period_f, pending_long_f, pending_short_f, current_regime_f = 0, False, False, None
+for _, row in df_full_calc.iterrows():
+    ma_val, close_val = row["MA"], row["close"]
+    if pd.isna(ma_val) or ma_val == 0:
+        signals_f.append(""); period_ids_f.append(current_period_f); period_types_f.append(current_regime_f); continue
+    rel_diff = (close_val - ma_val) / ma_val
+    if rel_diff <= -threshold_ratio: pending_long_f = True
+    if rel_diff >= threshold_ratio: pending_short_f = True
+    signal = ""
+    if pending_long_f and rel_diff > threshold_ratio:
+        signal = "LONG"; pending_long_f = False; pending_short_f = True; current_period_f += 1; current_regime_f = "long"
+    elif pending_short_f and rel_diff < -threshold_ratio:
+        signal = "SHORT"; pending_short_f = False; pending_long_f = True; current_period_f += 1; current_regime_f = "short"
+    signals_f.append(signal); period_ids_f.append(current_period_f); period_types_f.append(current_regime_f)
+
+df_full_calc["signal"] = pd.Series(signals_f, index=df_full_calc.index)
+df_full_calc["period"] = pd.Series(period_ids_f, index=df_full_calc.index, dtype="int64")
+df_full_calc["period_type"] = pd.Series(period_types_f, index=df_full_calc.index, dtype="object")
+
+long_peak_gains_full, short_trough_drops_full = [], []
+for _, pdf in df_full_calc.groupby("period"):
+    pts = pdf.get("period_type")
+    if pts is None or pts.empty: continue
+    ptype = pts.iloc[-1]
+    if pd.isna(ptype) or ptype not in {"long", "short"}: continue
+    if ptype == "long":
+        y_ext = pdf["high"].max(); srows = pdf[pdf["signal"] == "LONG"]
+        start_close = (srows["close"].iloc[0] if not srows.empty else pdf["close"].iloc[0])
+        if pd.notna(start_close) and pd.notna(y_ext) and start_close > 0:
+            long_peak_gains_full.append((y_ext / start_close - 1.0) * 100.0)
+    else:
+        y_ext = pdf["low"].min(); srows = pdf[pdf["signal"] == "SHORT"]
+        start_close = (srows["close"].iloc[0] if not srows.empty else pdf["close"].iloc[0])
+        if pd.notna(start_close) and pd.notna(y_ext) and start_close > 0:
+            short_trough_drops_full.append((1.0 - (y_ext / start_close)) * 100.0)
+
+avg_long_gain_full = (sum(long_peak_gains_full) / len(long_peak_gains_full)) if long_peak_gains_full else None
+avg_short_drop_full = (sum(short_trough_drops_full) / len(short_trough_drops_full)) if short_trough_drops_full else None
+
+b2c1, b2c2, b2c3, b2c4 = st.columns(4)
+b2c1.metric("Tüm Veri Ort. Tepe Artış (%)", f"{avg_long_gain_full:.2f}" if avg_long_gain_full is not None else "-",
+           help="Tüm veri LONG sinyal kapanışından periyot içi en yüksek fiyata yüzde artış ortalaması")
+b2c2.metric("Tüm Veri Ort. Dip Düşüş (%)", f"{avg_short_drop_full:.2f}" if avg_short_drop_full is not None else "-",
+           help="Tüm veri SHORT sinyal kapanışından periyot içi en düşük fiyata yüzde düşüş ortalaması")
+b2c3.metric("Tüm Veri LONG Periyot", f"{len(long_peak_gains_full)}")
+b2c4.metric("Tüm Veri SHORT Periyot", f"{len(short_trough_drops_full)}")
 
 # -------------------- Data Table --------------------
 st.subheader("Veri Tablosu")
